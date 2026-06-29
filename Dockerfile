@@ -1,30 +1,42 @@
-# ============================================================
-# Hermes VNC Live — Browser Preview for Hermes AI Agent
-# Free live noVNC + Playwright Chromium + XFCE on Docker
-# ============================================================
 FROM debian:bookworm-slim
 
-# --- System dependencies ---
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-    xvfb x11vnc novnc websockify \
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install all required packages
+RUN apt-get update && apt-get install -y \
+    chromium \
+    x11vnc \
+    xvfb \
+    novnc \
+    websockify \
     openbox \
-    xfce4 xfce4-panel xfce4-taskmanager xfce4-terminal \
-    xfwm4 xfdesktop4 \
-    python3 python3-pip python3-aiohttp \
-    dbus-x11 curl wget ca-certificates \
-    fonts-liberation fonts-noto-color-emoji \
+    xterm \
+    curl \
+    procps \
+    x11-xserver-utils \
+    tint2 \
+    socat \
+    --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Playwright + Chromium ---
-RUN pip3 install --break-system-packages playwright 2>/dev/null || pip3 install playwright
-RUN playwright install chromium 2>/dev/null || true
-RUN playwright install-deps chromium 2>/dev/null || true
+# Create a non-root user (optional, Chromium runs as root with --no-sandbox)
+RUN useradd -m -s /bin/bash vnc \
+    && mkdir -p /home/vnc/.vnc \
+    && chown -R vnc:vnc /home/vnc/.vnc
 
-# --- App scripts ---
+# Openbox right-click menu
+RUN mkdir -p /etc/xdg/openbox
+COPY menu.xml /etc/xdg/openbox/menu.xml
+
+# Startup script
 COPY start.sh /start.sh
-COPY cdp_proxy.py /cdp_proxy.py
-COPY run_browser.py /run_browser.py
 RUN chmod +x /start.sh
 
-EXPOSE 5900 6080 9223
+# Ports:
+#   5900 - VNC
+#   6080 - noVNC (web browser access)
+#   9223 - Chromium CDP (internal)
+#   9224 - socat CDP proxy (accessible from other containers)
+EXPOSE 5900 6080 9224
+
 CMD ["/start.sh"]

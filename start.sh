@@ -1,46 +1,74 @@
 #!/bin/bash
-# ============================================================
-# start.sh — Launches XFCE + VNC + noVNC + Playwright Chromium
-# ============================================================
 set -e
 
-# Cleanup old X locks
-rm -f /tmp/.X*-lock
-rm -rf /tmp/.X11-unix && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+# -------------------------------------------------------
+# Remove stale Chromium singleton lock files.
+# These are left behind when the container stops uncleanly
+# and would prevent Chromium from starting next time.
+# -------------------------------------------------------
+rm -f /chromium-profile/SingletonLock \
+       /chromium-profile/SingletonCookie \
+       /chromium-profile/SingletonSocket
 
-# 1) Xvfb — Virtual display
-Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset &
+# Start virtual display (invisible screen inside the container)
+Xvfb :99 -screen 0 1280x800x24 -ac &
 export DISPLAY=:99
-sleep 2
-
-# 2) dbus — Required by XFCE
-export DBUS_SESSION_BUS_ADDRESS=$(dbus-daemon --session --fork --print-address 2>/dev/null)
 sleep 1
 
-# 3) XFCE4 — Full desktop with taskbar
-startxfce4 &
-sleep 4
-
-# 4) x11vnc — VNC server with click/keyboard fix
-x11vnc -display :99 -rfbport 5900 -nopw -forever -shared \
-       -noxdamage -quiet -bg \
-       -pointer_mode 2 -cursor arrow
+# Start Openbox window manager
+openbox &
 sleep 1
 
-# 5) websockify — noVNC web interface
-websockify --web=/usr/share/novnc 6080 localhost:5900 &
+# Dark blue background
+xsetroot -solid "#1e3a5f" &
+
+# Start taskbar
+tint2 &
+
+# Start VNC server (no password — secure behind your firewall/SSH tunnel)
+x11vnc -display :99 -rfbport 5900 -nopw \
+       -forever -shared -noxdamage -quiet &
 sleep 1
 
-# 6) Playwright Chromium — Headed browser
-python3 /run_browser.py &
-sleep 5
+# Start noVNC: converts VNC to WebSocket so you can use a browser
+websockify --web /usr/share/novnc/ 6080 localhost:5900 &
+sleep 1
 
-# 7) CDP Proxy — Allows Hermes agent to connect
-python3 /cdp_proxy.py &
+# -------------------------------------------------------
+# Launch Chromium
+#   --user-data-dir  → persistent profile (cookies, sessions survive restarts)
+#   --remote-debugging-port → enables CDP on port 9223 (localhost only)
+#   --remote-debugging-address=0.0.0.0 → socat will proxy it out on 9224
+# -------------------------------------------------------
+chromium \
+  --no-sandbox \
+  --disable-gpu \
+  --disable-dev-shm-usage \
+  --display=:99 \
+  --window-size=1280,800 \
+  --start-maximized \
+  --remote-debugging-port=9223 \
+  --remote-debugging-address=0.0.0.0 \
+  --user-data-dir=/chromium-profile \
+  http://hermes:9119 &
 
-echo "========================================"
-echo " noVNC: http://0.0.0.0:6080/vnc.html"
-echo " CDP:   ws://0.0.0.0:9223"
-echo "========================================"
+sleep 3
 
+# -------------------------------------------------------
+# socat proxy: exposes CDP to other Docker containers
+#
+# Chromium CDP responds to requests only when the Host header
+# is an IP address. Since Docker container names (hostnames)
+# are rejected, we proxy 9224 → 127.0.0.1:9223 so Hermes
+# can connect via the container IP directly.
+# -------------------------------------------------------
+socat TCP-LISTEN:9224,fork,reuseaddr TCP:127.0.0.1:9223 &
+
+echo "================================================"
+echo " hermes-vnc started successfully!"
+echo " noVNC (browser): http://YOUR_SERVER_IP:6080/vnc.html"
+echo " CDP (for Hermes): port 9224 on container IP"
+echo "================================================"
+
+# Keep container running
 wait

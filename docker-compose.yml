@@ -1,22 +1,25 @@
-version: '3.8'
-
 services:
   hermes-vnc:
     build: .
     container_name: hermes-vnc
-    ports:
-      - "5900:5900"   # VNC
-      - "6080:6080"   # noVNC (web browser preview)
-      - "9223:9223"   # CDP proxy (for Hermes agent)
-    shm_size: '2gb'
     restart: unless-stopped
-    environment:
-      - DISPLAY=:99
-      # Set this to your server's IP so CDP URLs resolve correctly
-      - PROXY_HOST=YOUR_SERVER_IP:9223
+    ports:
+      - "0.0.0.0:6080:6080"   # noVNC — access from browser: http://YOUR_IP:6080/vnc.html
+      - "127.0.0.1:5900:5900"  # VNC direct (localhost only for security)
+    volumes:
+      # Persistent Chromium profile: cookies, sessions, and logins survive container restarts.
+      # Create this folder first: mkdir -p /opt/data/chromium-profile
+      - /opt/data/chromium-profile:/chromium-profile
     networks:
-      - hermes_net
+      - hermes_default   # must be the same network as your Hermes container
+    shm_size: '256mb'    # Chromium needs extra shared memory
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
-  hermes_net:
-    external: true   # Should match the network used by Hermes agent
+  hermes_default:
+    external: true   # this network is created by the Hermes docker-compose

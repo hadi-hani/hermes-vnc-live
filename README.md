@@ -1,178 +1,253 @@
-# 🤖 Hermes VNC Live — Free Live Browser Preview
+# hermes-vnc-live
 
-> **Watch your Hermes AI Agent browse the web in real-time — completely free, self-hosted.**
+A Docker container that runs **Chromium inside a virtual desktop** (VNC/noVNC), with **Chrome DevTools Protocol (CDP)** exposed so [Hermes AI agent](https://github.com/hadi-hani/hermes) can control the browser remotely.
 
-![noVNC Preview](https://img.shields.io/badge/noVNC-Live%20Preview-blue?style=flat-square)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Free](https://img.shields.io/badge/Cost-100%25%20Free-brightgreen?style=flat-square)
+> Built and battle-tested alongside Hermes. This is the exact setup used in production.
 
 ---
 
-## 🎯 What is this?
+## What is this?
 
-This project gives [Hermes AI Agent](https://github.com/hadi-hani/hermes) a **live visual browser** you can watch from any browser — no paid services, no subscriptions, no cloud fees.
-
-When Hermes is given a task (e.g. via Telegram), you can open a URL and **watch it navigate, click, and type in real-time**.
-
----
-
-## ✨ Features
-
-- 🌐 **Live browser preview** — watch Hermes browse in real-time via noVNC
-- 🖱️ **Full mouse & keyboard support** — interact manually if needed
-- 🗂️ **XFCE taskbar** — see all open windows and apps
-- 🔌 **CDP proxy** — Hermes connects via Chrome DevTools Protocol
-- 🐳 **Single Docker container** — easy to deploy anywhere
-- 💰 **100% free** — runs on any VPS or spare machine
-- 🔄 **Auto-restart** — recovers automatically if the container crashes
+| Component | Role |
+|-----------|------|
+| **Xvfb** | Virtual screen (no physical monitor needed) |
+| **Openbox** | Lightweight window manager |
+| **Chromium** | The real browser Hermes controls |
+| **x11vnc** | Streams the virtual screen over VNC |
+| **noVNC** | Lets you watch/control the browser from any web browser |
+| **socat** | Proxies CDP port so Hermes container can reach it |
 
 ---
 
-## 📋 Requirements
+## Architecture
 
-- A Linux server (VPS, dedicated, or local machine)
-- Docker & Docker Compose installed
-- Hermes AI Agent already running
-- Open ports: `6080` (noVNC), `9223` (CDP), `5900` (VNC optional)
+```
+┌──────────────────────────────────────────────────────┐
+│                   Your VPS / Server                  │
+│                                                      │
+│  ┌─────────────────┐      ┌───────────────────────┐  │
+│  │   hermes-vnc    │      │        hermes         │  │
+│  │                 │      │   (AI agent + API)    │  │
+│  │  Xvfb :99       │      │                       │  │
+│  │  Openbox        │      │  cdp_url:             │  │
+│  │  Chromium ──────┼──────┼► http://172.x.x.x:9224│  │
+│  │  (CDP :9223)    │      │                       │  │
+│  │  socat :9224 ◄──┘      └───────────────────────┘  │
+│  │  x11vnc :5900   │                                  │
+│  │  noVNC  :6080   │◄── You watch here in browser     │
+│  └─────────────────┘                                  │
+│                                                      │
+│  Docker network: hermes_default                      │
+└──────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 🚀 Quick Start (Step by Step)
+## Prerequisites
 
-### Step 1 — Clone this repository
+- A Linux VPS (Ubuntu 22.04+ recommended)
+- Docker + Docker Compose installed
+- [Hermes](https://github.com/hadi-hani/hermes) already running (it creates the `hermes_default` Docker network)
+
+---
+
+## Setup Guide (Step by Step)
+
+### Step 1 — Clone this repo
 
 ```bash
-git clone https://github.com/hadi-hani/hermes-vnc-live.git
-cd hermes-vnc-live
+git clone https://github.com/hadi-hani/hermes-vnc-live.git /opt/hermes-vnc
+cd /opt/hermes-vnc
 ```
 
-### Step 2 — Set your server IP
+### Step 2 — Create the persistent profile directory
 
-Edit `docker-compose.yml` and replace `YOUR_SERVER_IP` with your actual server IP:
-
-```yaml
-environment:
-  - PROXY_HOST=123.456.78.90:9223
-```
-
-### Step 3 — Create the Docker network (if not exists)
+This folder stores Chromium's cookies and sessions so you stay logged in across restarts:
 
 ```bash
-docker network create hermes_net
+mkdir -p /opt/data/chromium-profile
 ```
 
-> ⚠️ The network name must match what Hermes agent uses. Change it in `docker-compose.yml` if needed.
+### Step 3 — Make sure the Hermes network exists
 
-### Step 4 — Build and run
+If Hermes is already running, its network exists. Verify:
+
+```bash
+docker network ls | grep hermes_default
+```
+
+If it doesn't exist yet, create it manually:
+
+```bash
+docker network create hermes_default
+```
+
+### Step 4 — Build and start
 
 ```bash
 docker compose up -d --build
 ```
 
-First build takes ~5 minutes (downloads Chromium ~177MB). Subsequent builds are cached and take seconds.
+First build takes ~5 minutes (downloads ~300MB of packages). Subsequent builds use cache and take ~10 seconds.
 
-### Step 5 — Open the live preview
+### Step 5 — Verify it's running
 
-Open your browser and go to:
+```bash
+# Check container status
+docker ps | grep hermes-vnc
 
-```
+# Check logs
+docker logs hermes-vnc --tail 20
+
+# Open browser and go to:
 http://YOUR_SERVER_IP:6080/vnc.html
 ```
 
-You will see the **XFCE desktop with Chromium already open** — ready to be controlled by Hermes!
+You should see a dark blue desktop with Chromium open.
 
----
+### Step 6 — Get the container IP (needed for Hermes config)
 
-## ⚙️ Configure Hermes Agent
-
-In your Hermes `config.yaml`, set the CDP URL to point to this container:
-
-```yaml
-browser:
-  cdp_url: 'http://CONTAINER_IP:9223'
-```
-
-To get the container's IP:
+Chromium's CDP rejects hostname-based connections (DNS rebinding protection). You must use the container's IP:
 
 ```bash
 docker inspect hermes-vnc --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
 ```
 
+Example output: `172.22.0.3`
+
+### Step 7 — Configure Hermes
+
+In your Hermes `config.yaml`, set:
+
+```yaml
+browser:
+  cdp_url: http://172.22.0.3:9224   # use the IP from Step 6
+```
+
 Then restart Hermes:
 
 ```bash
-docker restart hermes
+cd /opt/hermes && docker compose restart hermes
+```
+
+### Step 8 — Test CDP connection
+
+From inside the Hermes container:
+
+```bash
+docker exec hermes sh -c 'curl -s http://172.22.0.3:9224/json/version'
+```
+
+Expected response:
+```json
+{
+  "Browser": "Chrome/149.0.x.x",
+  "webSocketDebuggerUrl": "ws://172.22.0.3:9224/devtools/browser/..."
+}
+```
+
+If you see this — **everything is working!** ✅
+
+---
+
+## Persistent Login Sessions
+
+Chromium's profile is stored at `/opt/data/chromium-profile` on your host (mapped into the container as `/chromium-profile`).
+
+**How to save your logins:**
+1. Open `http://YOUR_IP:6080/vnc.html` in your browser
+2. Log in to any website (Google, Twitter, etc.) inside the VNC browser
+3. Close the VNC tab — your session is saved permanently
+4. Even after `docker compose restart`, you'll still be logged in ✅
+
+**Why it works:** The startup script automatically removes Chromium's `SingletonLock` files, which prevents the "profile in use" error after restarts, while keeping all cookies and sessions intact.
+
+---
+
+## Updating the Container IP After Restart
+
+Container IPs can change after a server reboot. Add this alias to your `~/.bashrc` to make updating easy:
+
+```bash
+alias hermes-vnc-ip='docker inspect hermes-vnc --format "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"'
+```
+
+Or use this one-liner to auto-update your Hermes config:
+
+```bash
+VNC_IP=$(docker inspect hermes-vnc --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+sed -i "s|cdp_url: http://.*:9224|cdp_url: http://$VNC_IP:9224|g" /opt/data/hermes/config.yaml
+cd /opt/hermes && docker compose restart hermes
+echo "Updated cdp_url to http://$VNC_IP:9224"
 ```
 
 ---
 
-## 📁 Project Structure
+## Troubleshooting
+
+### Chromium won't start — "profile in use"
+
+```bash
+rm -f /opt/data/chromium-profile/SingletonLock \
+       /opt/data/chromium-profile/SingletonCookie \
+       /opt/data/chromium-profile/SingletonSocket
+docker compose restart
+```
+
+### CDP connection refused from Hermes
+
+1. Check the container IP hasn't changed:
+   ```bash
+   docker inspect hermes-vnc --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+   ```
+2. Update `cdp_url` in Hermes config with the new IP
+3. Restart Hermes
+
+### noVNC blank screen
+
+```bash
+docker logs hermes-vnc --tail 30
+docker compose restart
+```
+
+### Port 6080 not accessible
+
+Check your firewall:
+```bash
+# UFW
+ufw allow 6080/tcp
+
+# iptables
+iptables -A INPUT -p tcp --dport 6080 -j ACCEPT
+```
+
+---
+
+## File Structure
 
 ```
 hermes-vnc-live/
 ├── Dockerfile          # Container definition
-├── docker-compose.yml  # Easy deployment config
-├── start.sh            # Startup script (Xvfb → XFCE → VNC → Chromium)
-├── run_browser.py      # Playwright Chromium launcher
-├── cdp_proxy.py        # CDP HTTP proxy (port 9222 → 9223)
+├── docker-compose.yml  # Service configuration with volume mounts
+├── start.sh            # Startup script (Xvfb → Openbox → VNC → Chromium → socat)
+├── menu.xml            # Openbox right-click menu
 └── README.md           # This file
 ```
 
 ---
 
-## 🔧 How It Works
+## How the CDP Proxy Works
+
+Chromium listens on `127.0.0.1:9223` and rejects requests with non-IP `Host` headers (DNS rebinding protection). This means other containers can't connect using the hostname `hermes-vnc`.
+
+**Solution:** `socat` listens on `0.0.0.0:9224` and forwards all traffic to `127.0.0.1:9223`. Hermes connects using the raw IP (`172.x.x.x:9224`), which Chromium accepts.
 
 ```
-[Telegram] → [Hermes Agent] → [CDP Proxy :9223] → [Chromium :9222]
-                                                          ↓
-                                              [Xvfb Virtual Display]
-                                                          ↓
-                                              [x11vnc VNC Server :5900]
-                                                          ↓
-                                              [websockify :6080]
-                                                          ↓
-                                          [You watching at /vnc.html] 👁️
+Hermes → http://172.x.x.x:9224 → socat → 127.0.0.1:9223 → Chromium
 ```
 
-1. **Xvfb** creates a virtual display (no physical monitor needed)
-2. **XFCE4** provides a full desktop environment with taskbar
-3. **Playwright Chromium** opens headed in that virtual display
-4. **x11vnc** captures the virtual display and streams it via VNC
-5. **websockify + noVNC** converts VNC to WebSocket so any browser can view it
-6. **cdp_proxy** rewrites internal CDP URLs so Hermes can connect from outside the container
-
 ---
 
-## 🐛 Troubleshooting
+## License
 
-| Problem | Solution |
-|---------|----------|
-| Black screen on noVNC | Wait 10-15 seconds after starting, XFCE takes time to load |
-| Click/keyboard not working | Ensure you're using this image (includes `-pointer_mode 2` fix) |
-| Hermes can't connect to browser | Check `cdp_url` in Hermes config matches container IP |
-| Container keeps restarting | Run `docker logs hermes-vnc` to see the error |
-| Port 6080 not accessible | Check your firewall: `ufw allow 6080` |
-
----
-
-## 🔒 Security Note
-
-This setup has **no VNC password** by default — suitable for private/internal networks. For public servers, consider:
-- Setting a VNC password (`-rfbauth` in x11vnc)
-- Using a reverse proxy with HTTPS (nginx + Let's Encrypt)
-- Restricting port 6080 to trusted IPs only
-
----
-
-## 📜 License
-
-MIT — free to use, modify, and distribute.
-
----
-
-## 🙏 Credits
-
-Built as part of the [Hermes AI Agent](https://github.com/hadi-hani/hermes) project.
-
-Stack: [noVNC](https://novnc.com) · [Playwright](https://playwright.dev) · [x11vnc](https://github.com/LibVNC/x11vnc) · [XFCE](https://xfce.org) · [Docker](https://docker.com)
+MIT
