@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  hermes-vnc:
+    build: .
+    container_name: hermes-vnc
+    ports:
+      - "5900:5900"   # VNC
+      - "6080:6080"   # noVNC (web browser preview)
+      - "9223:9223"   # CDP proxy (for Hermes agent)
+    shm_size: '2gb'
+    restart: unless-stopped
+    environment:
+      - DISPLAY=:99
+      # Set this to your server's IP so CDP URLs resolve correctly
+      - PROXY_HOST=YOUR_SERVER_IP:9223
+    networks:
+      - hermes_net
+
+networks:
+  hermes_net:
+    external: true   # Should match the network used by Hermes agent
